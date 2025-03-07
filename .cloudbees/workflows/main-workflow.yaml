@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - "**"
-  workflow_dispatch:
 permissions:
   scm-token-own: read
   scm-token-org: read
@@ -71,7 +70,7 @@ jobs:
           destination: ${{ secrets.DOCKERHUB_USER }}/hackers-organized:${{ cloudbees.scm.sha }},${{ secrets.DOCKERHUB_USER }}/hackers-organized:latest
           tar-path: container-image.tar
           build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1,BUILDKIT_INLINE_CACHE=1
-      - uses: calculi-corp/assets-plugin-chain-utils/upload-binary@v1
+      - uses: cloudbees-io/asset-chain-utils/upload-binary@v1
         name: Upload binary from container build
         continue-on-error: true
         id: upload-binary
@@ -84,9 +83,9 @@ jobs:
         with:
           content: |-
             ## Built and pushed image to docker hub
-
+            
             [Docker Hub](https://hub.docker.com/repository/docker/ldonleycb/hackers-organized/tags)
-
+            
             Deployed hackers-organized:${{ cloudbees.scm.sha }}
           format: MARKDOWN
     needs: test
@@ -105,8 +104,9 @@ jobs:
         run: |
           npm ci
           npm run test:coverage
-      - uses: cloudbees-io/sonarqube-bundled-sast-scan-code@v1
+      - uses: cloudbees-io/sonarqube-bundled-sast-scan-code@v2
         name: Scan with SonarQube
+        id: sonar-scan
         kind: scan
         continue-on-error: true
         with:
@@ -127,7 +127,7 @@ jobs:
         with:
           orgname: ${{ secrets.SNYK_ORGNAME }}
           token: ${{ secrets.SNYK_TOKEN }}
-          language: LANGUAGE_JS
+          language: "LANGUAGE_JS"
       - name: Fetch SonarQube Issues
         id: FetchSonarQubeIssues
         uses: docker://alpine/git:latest
@@ -140,7 +140,7 @@ jobs:
           CRITICAL_COUNT=$(jq '[.issues[] | select(.severity=="CRITICAL")] | length' sonar-issues.json)
           MAJOR_COUNT=$(jq '[.issues[] | select(.severity=="MAJOR")] | length' sonar-issues.json)
           MINOR_COUNT=$(jq '[.issues[] | select(.severity=="MINOR")] | length' sonar-issues.json)
-
+          
           echo "${BLOCKER_COUNT}" >> $CLOUDBEES_OUTPUTS/BLOCKER_COUNT
           echo "${CRITICAL_COUNT}" >> $CLOUDBEES_OUTPUTS/CRITICAL_COUNT
           echo "${MAJOR_COUNT}" >> $CLOUDBEES_OUTPUTS/MAJOR_COUNT
@@ -150,7 +150,7 @@ jobs:
         with:
           content: |-
             ## SonarQube Analysis Results
-
+            
             | Severity             | Issue Count |
             |----------------------|-------------|
             | BLOCKER_COUNT        | ${{ steps.FetchSonarQubeIssues.outputs.BLOCKER_COUNT }} |
@@ -158,7 +158,16 @@ jobs:
             | MAJOR_COUNT          | ${{ steps.FetchSonarQubeIssues.outputs.MAJOR_COUNT }} |
             | MINOR_COUNT          | ${{ steps.FetchSonarQubeIssues.outputs.MINOR_COUNT }} |
           format: MARKDOWN
+
+      # - name: Quality gate
+      #   if: ${{ fromJSON(steps.FetchSonarQubeIssues.outputs.BLOCKER_COUNT) > 3 }} 
+      #   uses: docker://alpine:3.18
+      #   run: |
+      #     echo "Scan gate failed: Unacceptable quality threshold"
+      #     exit 1
+
   deploy:
+## SPIKE-BUSTER to enter a CBC interogtation step here. 
     environment: DOW Production
     steps:
       - name: Checkout
@@ -173,16 +182,24 @@ jobs:
         with:
           kustomization-base-dir: ${{ cloudbees.workspace }}/k8s/base
           kustomization-overlays-dir: ${{ cloudbees.workspace }}/k8s/overlays/prod
-          environment-variables: "{}"
+          environment-variables: '{}'
       - name: Publish evidence
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |-
             ## Deployed environment
             [Production frontend](https://hackers-organized-prod.preview.cb-demos.io/)
-
+            
             Running hackers-organized:${{ cloudbees.scm.sha }}
           format: MARKDOWN
+      - name: Register_deployed_artifact
+        uses: https://github.com/cloudbees-io/register-deployed-artifact@v1
+        with:
+          name: "ldonleycb/hackers-organized"
+          version: "${{ cloudbees.scm.sha }}"
+          url: "${{ secrets.DOCKERHUB_USER }}/hackers-organized:${{ cloudbees.scm.sha }}"
+          digest: ""
+          target-environment: "DOW Production"
     needs:
       - build-container-image
       - scan
